@@ -22,6 +22,7 @@ struct LogEntry {
 
 /// OmniPaxosDurability is a OmniPaxos node that should provide the replicated
 /// implementation of the DurabilityLayer trait required by the Datastore.
+
 #[derive(Clone)]
 pub struct OmniPaxosDurability {
     // TODO
