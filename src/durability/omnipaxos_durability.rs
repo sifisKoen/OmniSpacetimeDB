@@ -114,6 +114,10 @@ impl DurabilityLayer for OmniPaxosDurability {
 mod tests{
     use super::LogEntry;
 
+<<<<<<< HEAD
 
 }
+=======
+>>>>>>> cfa874c (omni_durability)
 
+}
