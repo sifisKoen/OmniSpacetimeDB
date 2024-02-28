@@ -11,7 +11,7 @@ use omnipaxos::{
 use omnipaxos_storage::memory_storage::MemoryStorage;
 
 use omnipaxos::macros::Entry;
-
+use omnipaxos::util::LogEntry as utilsLogEntry;
 
 #[derive(Clone, Debug, Entry)]
 // Represents an entry in the transaction log.
@@ -55,25 +55,20 @@ impl OmniPaxosDurability {
             omni_paxos,
         }
     }
-
-    fn decode_log_iter(log_iter:OmniPaxos<LogEntry, MemoryStorage<LogEntry>>){
-        
-    }
 }
 
 impl DurabilityLayer for OmniPaxosDurability {
 
     fn iter(&self) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
         let log_iter = self.omni_paxos.read_entries(0..self.omni_paxos.get_decided_idx());
-        let a = match log_iter{
-            Some(entry)=>{
-                entry.map(|log_entry| {println!("{:?}", log_entry)});
-            },
-            None=>panic!("entry None")
-        };
-        
-        todo!()
-        
+        let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
+            match log_entry {
+                utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
+                _ => None,
+            }
+        }).collect();
+
+        Box::new(decided_entries.into_iter())
     }
 
     fn iter_starting_from_offset(
@@ -98,9 +93,8 @@ impl DurabilityLayer for OmniPaxosDurability {
 
 #[cfg(test)]
 mod tests{
+    use super::LogEntry;
 
-    fn test_omnipaxos(){
 
-    }
 }
 
