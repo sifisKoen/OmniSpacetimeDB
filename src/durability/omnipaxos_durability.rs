@@ -5,7 +5,7 @@ Do we need to implement the OmniPaxosConfig, ServerConfig,
 and ClusterConfig in this file or into Node?
 */
 use omnipaxos::{
-    storage, ClusterConfig, OmniPaxos, OmniPaxosConfig, ServerConfig
+    storage, utils, ClusterConfig, OmniPaxos, OmniPaxosConfig, ServerConfig
 };
 
 use omnipaxos_storage::memory_storage::MemoryStorage;
@@ -75,7 +75,19 @@ impl DurabilityLayer for OmniPaxosDurability {
         &self,
         offset: TxOffset,
     ) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        todo!()
+        /*
+        We start the iteration to our omni_paxos entries from the offset that we pass,
+        until the decided index.
+         */
+        let log_iter = self.omni_paxos.read_entries(offset..self.omni_paxos.get_decided_idx());
+        let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
+            match log_entry {
+                utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
+                _ => None,
+            }
+        }).collect();
+
+        Box::new(decided_entries.into_iter());
     }
 
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
