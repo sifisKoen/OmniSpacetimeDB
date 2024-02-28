@@ -30,26 +30,14 @@ pub struct OmniPaxosDurability {
 
 // Implement OmniPaxosDurability
 impl OmniPaxosDurability {
-    // Create a new instance of the durability
-    pub fn new(server_id: u64, cluster_nodes: Vec<u64>) -> Self {
-        let cluster_config = ClusterConfig {
-            configuration_id: 1,
-            nodes: cluster_nodes,
-            ..Default::default()
-        };
-
-        let server_config = ServerConfig {
-            pid: server_id,
-            ..Default::default()
-        };
-
-        let omnipaxos_config = OmniPaxosConfig{
-            cluster_config,
-            server_config
-        };
-
+    // Create a new instance of the durability sub-node in
+    pub fn new(omnipaxos_cluster_config: OmniPaxosConfig) -> Self {
+    /*
+    We pass omnipaxos_cluster_config type of OmniPaxosConfig.
+    We take this config from our Node.
+    */
         let storage = MemoryStorage::default();
-        let omni_paxos: OmniPaxos::<LogEntry, MemoryStorage<LogEntry>> = omnipaxos_config.build(storage).unwrap();
+        let omni_paxos: OmniPaxos::<LogEntry, MemoryStorage<LogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
 
         OmniPaxosDurability{
             omni_paxos,
