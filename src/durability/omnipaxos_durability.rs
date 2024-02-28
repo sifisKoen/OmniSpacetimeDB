@@ -5,7 +5,7 @@ Do we need to implement the OmniPaxosConfig, ServerConfig,
 and ClusterConfig in this file or into Node?
 */
 use omnipaxos::{
-    storage, ClusterConfig, OmniPaxos, OmniPaxosConfig, ServerConfig
+    storage, utils, ClusterConfig, OmniPaxos, OmniPaxosConfig, ServerConfig
 };
 
 use omnipaxos_storage::memory_storage::MemoryStorage;
@@ -75,26 +75,19 @@ impl DurabilityLayer for OmniPaxosDurability {
         &self,
         offset: TxOffset,
     ) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        let durable_offset = self.durable_offset.lock().unwrap();
-        let mut offset = durable_offset.as_ref().unwrap().0;
-
-        // Open the log file for reading.
-        let mut file = File::open(&self.filepath).expect("Failed to open log file");
-
-        // Move the cursor to the desired offset.
-        file.seek(SeekFrom::Start(offset.0)).expect("Failed to seek to offset");
-
-
-        Box::new(std::iter::from_fn(move || {
-            match LogEntry::deserialize(&mut file) {
-                Ok(entry) => {
-                    let tx_offset = TxOffset(offset);
-                    offset += 1;
-                    Some((tx_offset, entry.tx_data))
-                }
-                Err(_) => None,
+        /*
+        We start the iteration to our omni_paxos entries from the offset that we pass,
+        until the decided index.
+         */
+        let log_iter = self.omni_paxos.read_entries(offset..self.omni_paxos.get_decided_idx());
+        let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
+            match log_entry {
+                utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
+                _ => None,
             }
-        }))
+        }).collect();
+
+        Box::new(decided_entries.into_iter());
     }
 
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
