@@ -1,17 +1,10 @@
 use super::*;
 
-/*
-Do we need to implement the OmniPaxosConfig, ServerConfig, 
-and ClusterConfig in this file or into Node?
-*/
 use omnipaxos::{
-    storage, utils, ClusterConfig, OmniPaxos, OmniPaxosConfig, ServerConfig
+    OmniPaxos, OmniPaxosConfig, macros::Entry, util::LogEntry as utilsLogEntry
 };
 
 use omnipaxos_storage::memory_storage::MemoryStorage;
-
-use omnipaxos::macros::Entry;
-use omnipaxos::util::LogEntry as utilsLogEntry;
 
 #[derive(Clone, Debug, Entry)]
 // Represents an entry in the transaction log.
@@ -24,7 +17,6 @@ struct LogEntry {
 /// implementation of the DurabilityLayer trait required by the Datastore.
 
 pub struct OmniPaxosDurability {
-    // TODO
     omni_paxos: OmniPaxos<LogEntry, MemoryStorage<LogEntry>>,
 }
 
@@ -67,7 +59,7 @@ impl DurabilityLayer for OmniPaxosDurability {
         We start the iteration to our omni_paxos entries from the offset that we pass,
         until the decided index.
          */
-        let log_iter = self.omni_paxos.read_entries(offset.0..self.omni_paxos.get_decided_idx());
+        let log_iter = self.omni_paxos.read_entries(0..self.omni_paxos.get_decided_idx());
         let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
             match log_entry {
                 utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
@@ -89,16 +81,4 @@ impl DurabilityLayer for OmniPaxosDurability {
     fn get_durable_tx_offset(&self) -> TxOffset {
         TxOffset(self.omni_paxos.get_decided_idx())
     }
-}
-
-#[cfg(test)]
-mod tests{
-    use super::LogEntry;
-
-<<<<<<< HEAD
-
-}
-=======
->>>>>>> cfa874c (omni_durability)
-
 }
