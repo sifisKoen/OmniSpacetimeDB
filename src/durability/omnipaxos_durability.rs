@@ -67,7 +67,7 @@ impl DurabilityLayer for OmniPaxosDurability {
         We start the iteration to our omni_paxos entries from the offset that we pass,
         until the decided index.
          */
-        let log_iter = self.omni_paxos.read_entries(offset..self.omni_paxos.get_decided_idx());
+        let log_iter = self.omni_paxos.read_entries(offset.0..self.omni_paxos.get_decided_idx());
         let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
             match log_entry {
                 utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
@@ -75,7 +75,7 @@ impl DurabilityLayer for OmniPaxosDurability {
             }
         }).collect();
 
-        Box::new(decided_entries.into_iter());
+        Box::new(decided_entries.into_iter())
     }
 
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
