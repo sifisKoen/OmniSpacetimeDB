@@ -1,36 +1,76 @@
 use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
-use crate::datastore::*;
+use crate::datastore::{self, *};
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::{DurabilityLayer, DurabilityLevel};
 use omnipaxos::{messages::*, OmniPaxos};
 use omnipaxos::util::{LogEntry, NodeId};
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time};
 use crate::durability::omnipaxos_durability::OmniLogEntry;
+
+// New use
+use std::time::Duration;
+
+pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(2);
+pub const TICK_PERIOD: Duration = Duration::from_millis(10);
 
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
     // TODO Messaging and running
     pub incoming: mpsc::Receiver<OmniLogEntry>,
-    pub outgoing: mpsc::Receiver<Message<OmniLogEntry>>,
+    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
 }
 
 impl NodeRunner {
     async fn send_outgoing_msgs(&mut self) {
-        todo!()
+        let all_outgoing_omnipaxos_messages = self
+            .node
+            .lock()
+            .unwrap()
+            .omnipaxos_durability
+            .omni_paxos
+            .outgoing_messages();
+        for message in all_outgoing_omnipaxos_messages{
+            let receiver = message.get_receiver();
+            let channel = self
+                .outgoing
+                .get_mut(&receiver)
+                .expect("There is no channel for the receiver");
+            let _ = channel.send(message).await;
+        }
     }
 
+
     pub async fn run(&mut self) {
-        todo!()
+        let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
+        let mut tick_interval = time::interval(TICK_PERIOD);
+        loop {
+            tokio::select! {
+                biased;
+                _ = tick_interval.tick() => {
+                    self
+                    .node
+                    .lock()
+                    .unwrap()
+                    .omnipaxos_durability
+                    .omni_paxos
+                    .tick();
+                },
+                _ = 
+            }
+        }
     }
 }
 
 pub struct Node {
     node_id: NodeId, // Unique identifier for the node
                      // TODO Datastore and OmniPaxosDurability
+    omnipaxos_durability: OmniPaxosDurability,
+    datastore: datastore::example_datastore::ExampleDatastore,
 }
 
 impl Node {

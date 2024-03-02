@@ -17,9 +17,8 @@ pub struct OmniLogEntry {
 
 /// OmniPaxosDurability is a OmniPaxos node that should provide the replicated
 /// implementation of the DurabilityLayer trait required by the Datastore.
-
 pub struct OmniPaxosDurability {
-    omni_paxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>,
+    pub omni_paxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>,
 }
 
 // Implement OmniPaxosDurability
