@@ -19,7 +19,7 @@ pub struct OmniLogEntry {
 /// implementation of the DurabilityLayer trait required by the Datastore.
 
 pub struct OmniPaxosDurability {
-    omni_paxos: OmniPaxos<LogEntry, MemoryStorage<LogEntry>>,
+    omni_paxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>,
 }
 
 // Implement OmniPaxosDurability
@@ -31,7 +31,7 @@ impl OmniPaxosDurability {
     We take this config from our Node.
     */
         let storage = MemoryStorage::default();
-        let omni_paxos: OmniPaxos::<OniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
+        let omni_paxos: OmniPaxos::<OmniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
 
         OmniPaxosDurability{
             omni_paxos,
@@ -73,7 +73,7 @@ impl DurabilityLayer for OmniPaxosDurability {
     }
 
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
-        let write_entry = LogEntry { tx_offset, tx_data};
+        let write_entry = OmniLogEntry { tx_offset, tx_data};
 
         self.omni_paxos
             .append(write_entry)
