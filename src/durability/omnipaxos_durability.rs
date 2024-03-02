@@ -1,31 +1,24 @@
+use crate::datastore::{self, Datastore};
+
 use super::*;
 
-/*
-Do we need to implement the OmniPaxosConfig, ServerConfig, 
-and ClusterConfig in this file or into Node?
-*/
 use omnipaxos::{
-    storage, utils, ClusterConfig, OmniPaxos, OmniPaxosConfig, ServerConfig
+    OmniPaxos, OmniPaxosConfig, macros::Entry, util::LogEntry as utilsLogEntry
 };
 
 use omnipaxos_storage::memory_storage::MemoryStorage;
 
-use omnipaxos::macros::Entry;
-use omnipaxos::util::LogEntry as utilsLogEntry;
-
 #[derive(Clone, Debug, Entry)]
 // Represents an entry in the transaction log.
-struct LogEntry { 
+pub struct OmniLogEntry { 
     tx_offset: TxOffset, // Transaction offset (key)
     tx_data: TxData, // Transaction data (value)
 }
 
 /// OmniPaxosDurability is a OmniPaxos node that should provide the replicated
 /// implementation of the DurabilityLayer trait required by the Datastore.
-
 pub struct OmniPaxosDurability {
-    // TODO
-    omni_paxos: OmniPaxos<LogEntry, MemoryStorage<LogEntry>>,
+    pub omni_paxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>,
 }
 
 // Implement OmniPaxosDurability
@@ -37,7 +30,7 @@ impl OmniPaxosDurability {
     We take this config from our Node.
     */
         let storage = MemoryStorage::default();
-        let omni_paxos: OmniPaxos::<LogEntry, MemoryStorage<LogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
+        let omni_paxos: OmniPaxos::<OmniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
 
         OmniPaxosDurability{
             omni_paxos,
@@ -79,7 +72,7 @@ impl DurabilityLayer for OmniPaxosDurability {
     }
 
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
-        let write_entry = LogEntry { tx_offset, tx_data};
+        let write_entry = OmniLogEntry { tx_offset, tx_data};
 
         self.omni_paxos
             .append(write_entry)
@@ -89,9 +82,4 @@ impl DurabilityLayer for OmniPaxosDurability {
     fn get_durable_tx_offset(&self) -> TxOffset {
         TxOffset(self.omni_paxos.get_decided_idx())
     }
-}
-
-#[cfg(test)]
-mod tests{
-    use super::LogEntry;
 }
