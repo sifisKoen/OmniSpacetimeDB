@@ -21,7 +21,7 @@ pub const TICK_PERIOD: Duration = Duration::from_millis(10);
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
     // TODO Messaging and running
-    pub incoming: mpsc::Receiver<OmniLogEntry>,
+    pub incoming: mpsc::Receiver<Message<OmniLogEntry>>,
     pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
 }
 
@@ -60,7 +60,20 @@ impl NodeRunner {
                     .omni_paxos
                     .tick();
                 },
-                _ = 
+                _ = outgoing_interval.tick() => {
+                    self
+                    .send_outgoing_msgs().await;
+                },
+                Some(in_message) = self.incoming.recv() => {
+                    self
+                    .node
+                    .lock()
+                    .unwrap()
+                    .omnipaxos_durability
+                    .omni_paxos
+                    .handle_incoming(in_message);
+                },
+                else => {}
             }
         }
     }
