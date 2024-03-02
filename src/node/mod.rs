@@ -4,15 +4,18 @@ use crate::datastore::tx_data::TxResult;
 use crate::datastore::*;
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
 use crate::durability::{DurabilityLayer, DurabilityLevel};
-use omnipaxos::messages::*;
-use omnipaxos::util::NodeId;
+use omnipaxos::{messages::*, OmniPaxos};
+use omnipaxos::util::{LogEntry, NodeId};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
+use crate::durability::omnipaxos_durability::OmniLogEntry;
 
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
     // TODO Messaging and running
+    pub incoming: mpsc::Receiver<OmniLogEntry>,
+    pub outgoing: mpsc::Receiver<Message<OmniLogEntry>>,
 }
 
 impl NodeRunner {

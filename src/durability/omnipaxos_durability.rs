@@ -1,3 +1,5 @@
+use crate::datastore::{self, Datastore};
+
 use super::*;
 
 use omnipaxos::{
@@ -8,7 +10,7 @@ use omnipaxos_storage::memory_storage::MemoryStorage;
 
 #[derive(Clone, Debug, Entry)]
 // Represents an entry in the transaction log.
-struct LogEntry { 
+pub struct OmniLogEntry { 
     tx_offset: TxOffset, // Transaction offset (key)
     tx_data: TxData, // Transaction data (value)
 }
@@ -29,7 +31,7 @@ impl OmniPaxosDurability {
     We take this config from our Node.
     */
         let storage = MemoryStorage::default();
-        let omni_paxos: OmniPaxos::<LogEntry, MemoryStorage<LogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
+        let omni_paxos: OmniPaxos::<OniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
 
         OmniPaxosDurability{
             omni_paxos,
@@ -59,7 +61,7 @@ impl DurabilityLayer for OmniPaxosDurability {
         We start the iteration to our omni_paxos entries from the offset that we pass,
         until the decided index.
          */
-        let log_iter = self.omni_paxos.read_entries(0..self.omni_paxos.get_decided_idx());
+        let log_iter = self.omni_paxos.read_entries(offset.0..self.omni_paxos.get_decided_idx());
         let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
             match log_entry {
                 utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
