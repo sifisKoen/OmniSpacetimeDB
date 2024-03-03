@@ -8,6 +8,7 @@ use omnipaxos::{messages::*, OmniPaxos};
 use omnipaxos::util::{LogEntry, NodeId};
 use std::borrow::Borrow;
 use std::collections::HashMap;
+use std::ops::Index;
 use std::sync::{Arc, Mutex};
 use tokio::{sync::mpsc, time};
 use crate::durability::omnipaxos_durability::OmniLogEntry;
@@ -84,6 +85,7 @@ pub struct Node {
                      // TODO Datastore and OmniPaxosDurability
     omnipaxos_durability: OmniPaxosDurability,
     datastore: datastore::example_datastore::ExampleDatastore,
+    omnipaxos_cluster_leader: NodeId,
 }
 
 impl Node {
@@ -95,10 +97,44 @@ impl Node {
     /// it needs to apply any unapplied txns to its datastore.
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
-    pub fn update_leader(&mut self) {
-        todo!()
-    }
+    pub fn update_leader(&mut self){
+                
+        let leader = match self.omnipaxos_durability.omni_paxos.get_current_leader() {
+            Some(leader) => leader,
+            None => panic!("No leader elected")
+        };
 
+        if self.omnipaxos_cluster_leader != leader{
+            if self.omnipaxos_cluster_leader == self.node_id{
+                self.datastore.rollback_to_replicated_durability_offset().expect("There is nothing to roll back");
+                
+                match self.omnipaxos_durability.omni_paxos
+                .trim(match self.datastore.get_replicated_offset() {
+                    Some(index) => Some(index.0),
+                    None => panic!("There is no replicated offset")
+                }) {
+                    Ok(_) => println!("Trimmed successfully!"),
+                    Err(_) => panic!("Couldn't trim any more!")
+                }
+            }else if self.node_id == leader {
+                let  tx_box = self
+                .omnipaxos_durability
+                .iter_starting_from_offset(
+                    match self.datastore.get_replicated_offset(){
+                    Some(offset) => offset,
+                    None => panic!("There is no offset")
+                });
+                
+                for  (tx_offset, tx_data) in tx_box {
+                    self.omnipaxos_durability.append_tx(tx_offset, tx_data);
+                }
+
+            }
+            self.omnipaxos_cluster_leader = leader;    
+        }
+        
+    }
+    
     /// Apply the transactions that have been decided in OmniPaxos to the Datastore.
     /// We need to be careful with which nodes should do this according to desired
     /// behavior in the Datastore as defined by the application.
