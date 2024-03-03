@@ -11,8 +11,8 @@ use omnipaxos_storage::memory_storage::MemoryStorage;
 #[derive(Clone, Debug, Entry)]
 // Represents an entry in the transaction log.
 pub struct OmniLogEntry { 
-    tx_offset: TxOffset, // Transaction offset (key)
-    tx_data: TxData, // Transaction data (value)
+    pub tx_offset: TxOffset, // Transaction offset (key)
+    pub tx_data: TxData, // Transaction data (value)
 }
 
 /// OmniPaxosDurability is a OmniPaxos node that should provide the replicated
@@ -24,13 +24,13 @@ pub struct OmniPaxosDurability {
 // Implement OmniPaxosDurability
 impl OmniPaxosDurability {
     // Create a new instance of the durability sub-node in
-    pub fn new(omnipaxos_cluster_config: OmniPaxosConfig) -> Self {
+    pub fn new(omnipaxos_node: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>) -> Self {
     /*
     We pass omnipaxos_cluster_config type of OmniPaxosConfig.
     We take this config from our Node.
     */
-        let storage = MemoryStorage::default();
-        let omni_paxos: OmniPaxos::<OmniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_cluster_config.build(storage).unwrap();
+        let storage:MemoryStorage<OmniLogEntry> = MemoryStorage::default();
+        let omni_paxos: OmniPaxos::<OmniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_node;
 
         OmniPaxosDurability{
             omni_paxos,

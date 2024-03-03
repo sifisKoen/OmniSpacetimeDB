@@ -11,6 +11,11 @@ use omnipaxos::{messages::*, OmniPaxos};
 use omnipaxos::util::{LogEntry, NodeId};
 use std::borrow::Borrow;
 use tokio::{sync::mpsc, time};
+use crate::datastore::*;
+use crate::datastore::tx_data::*;
+//use datastore::tx_data::TxOffset;
+
+
 
 
 // New use
@@ -61,6 +66,14 @@ impl NodeRunner {
                     .omnipaxos_durability
                     .omni_paxos
                     .tick();
+
+                    // We consider to add a sleep inside here 
+
+                    self
+                    .node
+                    .lock()
+                    .unwrap()
+                    .update_leader();
                 },
                 _ = outgoing_interval.tick() => {
                     self
@@ -85,9 +98,9 @@ impl NodeRunner {
 pub struct Node {
     node_id: NodeId, // Unique identifier for the node
                      // TODO Datastore and OmniPaxosDurability
-                    
     omnipaxos_durability: OmniPaxosDurability,
     datastore: example_datastore::ExampleDatastore,
+    omnipaxos_cluster_leader: NodeId,
 
     
 }
@@ -100,6 +113,7 @@ impl Node {
             omnipaxos_durability:omni_durability,
             datastore: example_datastore::ExampleDatastore::new(),
             //leader_id:NodeId
+            omnipaxos_cluster_leader: node_id,
 
         }
     }
@@ -108,8 +122,42 @@ impl Node {
     /// it needs to apply any unapplied txns to its datastore.
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
-    pub fn update_leader(&mut self) {
-        todo!()
+    pub fn update_leader(&mut self){
+                
+        let leader = match self.omnipaxos_durability.omni_paxos.get_current_leader() {
+            Some(leader) => leader,
+            None => panic!("No leader elected")
+        };
+
+        if self.omnipaxos_cluster_leader != leader{
+            if self.omnipaxos_cluster_leader == self.node_id{
+                self.datastore.rollback_to_replicated_durability_offset().expect("There is nothing to roll back");
+                
+                match self.omnipaxos_durability.omni_paxos
+                .trim(match self.datastore.get_replicated_offset() {
+                    Some(index) => Some(index.0),
+                    None => panic!("There is no replicated offset")
+                }) {
+                    Ok(_) => println!("Trimmed successfully!"),
+                    Err(_) => panic!("Couldn't trim any more!")
+                }
+            }else if self.node_id == leader {
+                let  tx_box = self
+                .omnipaxos_durability
+                .iter_starting_from_offset(
+                    match self.datastore.get_replicated_offset(){
+                    Some(offset) => offset,
+                    None => panic!("There is no offset")
+                });
+                
+                for  (tx_offset, tx_data) in tx_box {
+                    self.omnipaxos_durability.append_tx(tx_offset, tx_data);
+                }
+
+            }
+            self.omnipaxos_cluster_leader = leader;    
+        }
+        
     }
 
     /// Apply the transactions that have been decided in OmniPaxos to the Datastore.
@@ -117,8 +165,19 @@ impl Node {
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
         //todo!()
-        
+        let mut iter = self.omnipaxos_durability.omni_paxos.read_entries(0..self.omnipaxos_durability.omni_paxos.get_decided_idx()).unwrap();
 
+        let decided_entries: Vec<(TxOffset, TxData)> = iter.iter().filter_map(|log_entry| {
+            match log_entry {
+                LogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
+                _ => None,
+            }
+        }).collect();
+        for (offset, data) in decided_entries{
+            let mut transaxtion = self.datastore.begin_mut_tx();
+            transaxtion.set(offset, data);
+            self.datastore.commit_mut_tx(transaxtion);
+        }  
     }
 
     pub fn begin_tx(
