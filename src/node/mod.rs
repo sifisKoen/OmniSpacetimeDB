@@ -60,6 +60,14 @@ impl NodeRunner {
                     .omnipaxos_durability
                     .omni_paxos
                     .tick();
+                    
+                    // We consider to add a sleep inside here 
+
+                    self
+                    .node
+                    .lock()
+                    .unwrap()
+                    .update_leader();
                 },
                 _ = outgoing_interval.tick() => {
                     self
