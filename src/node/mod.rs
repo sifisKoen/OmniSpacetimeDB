@@ -174,9 +174,9 @@ impl Node {
             }
         }).collect();
         for (offset, data) in decided_entries{
-            let mut transaxtion = self.datastore.begin_mut_tx();
-            transaxtion.set(offset, data);
-            self.datastore.commit_mut_tx(transaxtion);
+            let mut transaction = self.datastore.begin_mut_tx();
+            transaction.set(offset.0.to_string(), format!("{:?}", data));
+            self.datastore.commit_mut_tx(transaction);
         }  
     }
 
