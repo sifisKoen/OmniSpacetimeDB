@@ -34,6 +34,8 @@ pub struct NodeRunner {
 
 impl NodeRunner {
     async fn send_outgoing_msgs(&mut self) {
+        //Here we send the outgoing messages to the other nodes
+        //We get the outgoing messages from the omnipaxos node
         let all_outgoing_omnipaxos_messages = self
             .node
             .lock()
@@ -41,6 +43,7 @@ impl NodeRunner {
             .omnipaxos_durability
             .omni_paxos
             .outgoing_messages();
+        //We iterate over the messages and send them to the other nodes
         for message in all_outgoing_omnipaxos_messages{
             let receiver = message.get_receiver();
             let channel = self
@@ -55,9 +58,12 @@ impl NodeRunner {
     pub async fn run(&mut self) {
         let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
         let mut tick_interval = time::interval(TICK_PERIOD);
+        //here we have an infinite loop in which the node enters when it starts running
         loop {
+            //we run the following branches concurrently
             tokio::select! {
                 biased;
+                //we perform a tick on the omnipaxos node which helps in the election of a leader
                 _ = tick_interval.tick() => {
                     self
                     .node
@@ -67,18 +73,19 @@ impl NodeRunner {
                     .omni_paxos
                     .tick();
 
-                    // We consider to add a sleep inside here 
-
+                    //we execute the update_leader function which performs updates on the node
                     self
                     .node
                     .lock()
                     .unwrap()
                     .update_leader();
                 },
+                //we send the outgoing messages to the other nodes
                 _ = outgoing_interval.tick() => {
                     self
                     .send_outgoing_msgs().await;
                 },
+                //we receive the incoming messages from the other nodes
                 Some(in_message) = self.incoming.recv() => {
                     self
                     .node
@@ -98,14 +105,18 @@ impl NodeRunner {
 pub struct Node {
     node_id: NodeId, // Unique identifier for the node
                      // TODO Datastore and OmniPaxosDurability
+    //we have the omnipaxos durability which contains the omnipaxos node
     omnipaxos_durability: OmniPaxosDurability,
+    //we have the datastore which contains the data that the node stores
     datastore: example_datastore::ExampleDatastore,
+    // this is the id of the leader of the cluster
     omnipaxos_cluster_leader: NodeId,
 
     
 }
-
+//here we implement the functions for the Node 
 impl Node {
+    //this is the function that creates a new instance of the Node
     pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability) -> Self {
         //todo!()
         Node{
@@ -123,16 +134,18 @@ impl Node {
     /// If a node loses leadership, it needs to rollback the txns committed in
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self){
-                
+        //we get the current leader from the omnipaxos node    
         let leader = match self.omnipaxos_durability.omni_paxos.get_current_leader() {
             Some(leader) => leader,
             None => panic!("No leader elected")
         };
-
+        //we check if the leader has changed
         if self.omnipaxos_cluster_leader != leader{
+            //if we were the leader and we are not the leader anymore
             if self.omnipaxos_cluster_leader == self.node_id{
+                //we rollback the transactions that have not been replicated 
                 self.datastore.rollback_to_replicated_durability_offset().expect("There is nothing to roll back");
-                
+                //we trim the state of the omnipaxos node
                 match self.omnipaxos_durability.omni_paxos
                 .trim(match self.datastore.get_replicated_offset() {
                     Some(index) => Some(index.0),
@@ -141,7 +154,9 @@ impl Node {
                     Ok(_) => println!("Trimmed successfully!"),
                     Err(_) => panic!("Couldn't trim any more!")
                 }
+            //if we became the leader
             }else if self.node_id == leader {
+                //we apply the transactions
                 let  tx_box = self
                 .omnipaxos_durability
                 .iter_starting_from_offset(
@@ -149,12 +164,13 @@ impl Node {
                     Some(offset) => offset,
                     None => panic!("There is no offset")
                 });
-                
+                //we append them to the omnipaxos node
                 for  (tx_offset, tx_data) in tx_box {
                     self.omnipaxos_durability.append_tx(tx_offset, tx_data);
                 }
 
             }
+            //we update the leader id to the new leader
             self.omnipaxos_cluster_leader = leader;    
         }
         
@@ -165,21 +181,23 @@ impl Node {
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
         //todo!()
+        //we get the transactions that have been decided
         let mut iter = self.omnipaxos_durability.omni_paxos.read_entries(0..self.omnipaxos_durability.omni_paxos.get_decided_idx()).unwrap();
-
+        //we filter the transactions that have been decided an store them in a vector
         let decided_entries: Vec<(TxOffset, TxData)> = iter.iter().filter_map(|log_entry| {
             match log_entry {
                 LogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
                 _ => None,
             }
         }).collect();
+        //we apply the transactions to the datastore
         for (offset, data) in decided_entries{
             let mut transaction = self.datastore.begin_mut_tx();
             transaction.set(offset.0.to_string(), format!("{:?}", data));
             self.datastore.commit_mut_tx(transaction);
         }  
     }
-
+    
     pub fn begin_tx(
         &self,
         durability_level: DurabilityLevel,

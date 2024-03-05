@@ -39,7 +39,7 @@ impl OmniPaxosDurability {
 }
 
 impl DurabilityLayer for OmniPaxosDurability {
-
+    //this returns an iterator for the decided transactions that starts from the start of the log
     fn iter(&self) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
         let log_iter = self.omni_paxos.read_entries(0..self.omni_paxos.get_decided_idx());
         let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
@@ -51,7 +51,7 @@ impl DurabilityLayer for OmniPaxosDurability {
 
         Box::new(decided_entries.into_iter())
     }
-
+    //this returns an iterator for the decided transactions that starts from the offset that we pass
     fn iter_starting_from_offset(
         &self,
         offset: TxOffset,
@@ -70,7 +70,7 @@ impl DurabilityLayer for OmniPaxosDurability {
 
         Box::new(decided_entries.into_iter())
     }
-
+    // this appends the transaction to the log
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
         let write_entry = OmniLogEntry { tx_offset, tx_data};
 
@@ -78,7 +78,7 @@ impl DurabilityLayer for OmniPaxosDurability {
             .append(write_entry)
             .expect("Failed to append entry")
     }
-
+    // this reurns the index of the last decided entry
     fn get_durable_tx_offset(&self) -> TxOffset {
         TxOffset(self.omni_paxos.get_decided_idx())
     }
