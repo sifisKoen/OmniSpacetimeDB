@@ -168,7 +168,7 @@ mod tests {
     use super::*;
     use std::{sync::Arc, time::Duration};
 
-    fn create_runtime() -> Runtime {
+    pub fn create_runtime() -> Runtime {
         Builder::new_multi_thread()
             .worker_threads(4)
             .enable_all()
