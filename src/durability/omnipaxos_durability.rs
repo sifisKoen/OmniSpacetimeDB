@@ -1,83 +1,74 @@
-use crate::datastore::{self, Datastore};
-
-
+use self::example_durability::ExampleDurabilityLayer;
 use super::*;
-
+use crate::datastore::{tx_data::TxData, TxOffset};
 use omnipaxos::{
-    OmniPaxos, OmniPaxosConfig, macros::Entry, util::LogEntry as utilsLogEntry
+    OmniPaxos, OmniPaxosConfig, macros::Entry, util::LogEntry as UtilsLogEntry, errors::ConfigError
 };
-
 use omnipaxos_storage::memory_storage::MemoryStorage;
 
 #[derive(Clone, Debug, Entry)]
-// Represents an entry in the transaction log.
-pub struct OmniLogEntry { 
-    pub tx_offset: TxOffset, // Transaction offset (key)
-    pub tx_data: TxData, // Transaction data (value)
+pub struct OmniLogEntry {
+    pub tx_offset: TxOffset,
+    pub tx_data: TxData,
 }
 
-/// OmniPaxosDurability is a OmniPaxos node that should provide the replicated
-/// implementation of the DurabilityLayer trait required by the Datastore.
 pub struct OmniPaxosDurability {
     pub omni_paxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>,
 }
 
-// Implement OmniPaxosDurability
 impl OmniPaxosDurability {
-    // Create a new instance of the durability sub-node in
-    pub fn new(omnipaxos_node: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>) -> Self {
-    /*
-    We pass omnipaxos_cluster_config type of OmniPaxosConfig.
-    We take this config from our Node.
-    */
-        let storage:MemoryStorage<OmniLogEntry> = MemoryStorage::default();
-        let omni_paxos: OmniPaxos::<OmniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_node;
+    pub fn new(omni_paxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>) -> Self {
+        let storage = MemoryStorage::default();
 
-        OmniPaxosDurability{
-            omni_paxos,
-        }
+        OmniPaxosDurability { omni_paxos }
     }
 }
 
 impl DurabilityLayer for OmniPaxosDurability {
-
     fn iter(&self) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        let log_iter = self.omni_paxos.read_entries(0..self.omni_paxos.get_decided_idx());
-        let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
-            match log_entry {
-                utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
-                _ => None,
-            }
-        }).collect();
+        if let Some(entries) = &self.omni_paxos.read_entries(..) {
+            let decided_entries: Vec<_> = entries.iter().filter_map(|log_entry| {
+                match log_entry {
+                    UtilsLogEntry::Decided(entry) | UtilsLogEntry::Undecided(entry) => {
+                        Some((entry.tx_offset.clone(), entry.tx_data.clone()))
+                    }
+                    _ => None,
+                }
+            }).collect();
 
-        Box::new(decided_entries.into_iter())
+            Box::new(decided_entries.into_iter())
+        } else {
+            Box::new(std::iter::empty())
+        }
     }
 
-    fn iter_starting_from_offset(
-        &self,
-        offset: TxOffset,
-    ) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        /*
-        We start the iteration to our omni_paxos entries from the offset that we pass,
-        until the decided index.
-         */
-        let log_iter = self.omni_paxos.read_entries(offset.0..self.omni_paxos.get_decided_idx());
-        let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
-            match log_entry {
-                utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
-                _ => None,
-            }
-        }).collect();
+    fn iter_starting_from_offset(&self, offset: TxOffset) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
+        if let Some(entries) = &self.omni_paxos.read_entries(..) {
+            let decided_entries: Vec<_> = entries.iter().filter_map(|log_entry| {
+                match log_entry {
+                    UtilsLogEntry::Decided(entry) | UtilsLogEntry::Undecided(entry) => {
+                        if entry.tx_offset >= offset {
+                            Some((entry.tx_offset.clone(), entry.tx_data.clone()))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            }).collect();
 
-        Box::new(decided_entries.into_iter())
+            Box::new(decided_entries.into_iter())
+        } else {
+            Box::new(std::iter::empty())
+        }
     }
 
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
-        let write_entry = OmniLogEntry { tx_offset, tx_data};
+        let write_entry = OmniLogEntry { tx_offset, tx_data };
 
-        self.omni_paxos
-            .append(write_entry)
-            .expect("Failed to append entry")
+        if let Err(err) = self.omni_paxos.append(write_entry) {
+            eprintln!("Error appending entry to OmniPaxos: {:?}", err);
+        }
     }
 
     fn get_durable_tx_offset(&self) -> TxOffset {
