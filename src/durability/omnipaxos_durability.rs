@@ -1,85 +1,123 @@
-use crate::datastore::{self, Datastore};
-
 use super::*;
-
+use omnipaxos_storage::memory_storage::MemoryStorage;
+use crate::datastore::{tx_data::TxData, TxOffset};
 use omnipaxos::{
-    OmniPaxos, OmniPaxosConfig, macros::Entry, util::LogEntry as utilsLogEntry
+    errors::ConfigError,
+    macros::Entry,
+    util::LogEntry,
+    OmniPaxos,
+    ClusterConfig,
+    ServerConfig,
 };
 
-use omnipaxos_storage::memory_storage::MemoryStorage;
-
-#[derive(Clone, Debug, Entry)]
-// Represents an entry in the transaction log.
-pub struct OmniLogEntry { 
-    pub tx_offset: TxOffset, // Transaction offset (key)
-    pub tx_data: TxData, // Transaction data (value)
+// Definition of the Log structure representing a log entry
+#[derive(Debug, Clone, Entry)]
+pub struct TransactionLog {
+    tx_offset: TxOffset,
+    tx_data: TxData,
 }
 
-/// OmniPaxosDurability is a OmniPaxos node that should provide the replicated
-/// implementation of the DurabilityLayer trait required by the Datastore.
+// Definition of the OmniPaxosDurability struct
 pub struct OmniPaxosDurability {
-    pub omni_paxos: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>,
+    // A field to store the OmniPaxos instance with Log entries and MemoryStorage
+    pub omni_paxos: OmniPaxos<TransactionLog, MemoryStorage<TransactionLog>>,
 }
 
-// Implement OmniPaxosDurability
+// Implementation of methods for OmniPaxosDurability
 impl OmniPaxosDurability {
-    // Create a new instance of the durability sub-node in
-    pub fn new(omnipaxos_node: OmniPaxos<OmniLogEntry, MemoryStorage<OmniLogEntry>>) -> Self {
-    /*
-    We pass omnipaxos_cluster_config type of OmniPaxosConfig.
-    We take this config from our Node.
-    */
-        let storage:MemoryStorage<OmniLogEntry> = MemoryStorage::default();
-        let omni_paxos: OmniPaxos::<OmniLogEntry, MemoryStorage<OmniLogEntry>> = omnipaxos_node;
+    // Constructor for OmniPaxosDurability
+    pub fn new(server_config: ServerConfig, cluster_config: ClusterConfig) -> Result<OmniPaxosDurability, ConfigError> {
+        // Building the cluster configuration for the OmniPaxos instance
+        let cluster_config = cluster_config.build_for_server::<TransactionLog, MemoryStorage<TransactionLog>>(
+            server_config,
+            MemoryStorage::default(),
+        );
 
-        OmniPaxosDurability{
-            omni_paxos,
+        // Handling the result of building the OmniPaxos instance
+        match cluster_config {
+            Ok(cluster_config) => {
+                println!("OmniPaxos instance created successfully.");
+                // Returning the OmniPaxosDurability instance with the created OmniPaxos
+                Ok(OmniPaxosDurability { omni_paxos: cluster_config })
+            }
+            Err(err) => {
+                println!("Error creating OmniPaxos instance: {:?}", err);
+                // Returning the error if OmniPaxos instance creation fails
+                Err(err)
+            }
+        }
+        
+    }
+}
+
+// Implementation of the DurabilityLayer trait for OmniPaxosDurability
+impl DurabilityLayer for OmniPaxosDurability {
+    // Implementation of the iter method to iterate over all entries
+    fn iter(&self) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
+        // Checking if entries are available in the OmniPaxos instance
+        if let Some(entries) = &self.omni_paxos.read_entries(..) {
+            // Creating an iterator over the entries and flattening the results
+            let entry_iter = entries.iter().flat_map(|entry| match entry {
+                // Extracting TxOffset and TxData from Decided and Undecided entries
+                LogEntry::Decided(log) | LogEntry::Undecided(log) => {
+                    Some((log.tx_offset.clone(), log.tx_data.clone()))
+                }
+                // Ignoring other types of entries
+                _ => None,
+            });
+
+            // Returning the iterator as a Box
+            Box::new(entry_iter.collect::<Vec<_>>().into_iter())
+        } else {
+            // Returning an empty iterator if no entries are available
+            Box::new(std::iter::empty())
         }
     }
-}
 
-impl DurabilityLayer for OmniPaxosDurability {
-    //this returns an iterator for the decided transactions that starts from the start of the log
-    fn iter(&self) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        let log_iter = self.omni_paxos.read_entries(0..self.omni_paxos.get_decided_idx());
-        let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
-            match log_entry {
-                utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
+    // Implementation of iter_starting_from_offset to iterate from a specific offset
+    fn iter_starting_from_offset(&self, offset: TxOffset) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
+        // Checking if entries are available in the OmniPaxos instance
+        if let Some(entries) = &self.omni_paxos.read_entries(..) {
+            // Creating an iterator over the entries and filtering by offset
+            let entry_iter = entries.iter().filter_map(|entry| match entry {
+                // Extracting TxOffset and TxData from Decided and Undecided entries with offset check
+                LogEntry::Decided(log) | LogEntry::Undecided(log) => {
+                    if log.tx_offset >= offset {
+                        Some((log.tx_offset.clone(), log.tx_data.clone()))
+                    } else {
+                        None
+                    }
+                }
+                // Ignoring other types of entries
                 _ => None,
-            }
-        }).collect();
+            });
 
-        Box::new(decided_entries.into_iter())
+            // Returning the iterator as a Box
+            Box::new(entry_iter.collect::<Vec<_>>().into_iter())
+        } else {
+            // Returning an empty iterator if no entries are available
+            Box::new(std::iter::empty())
+        }
     }
-    //this returns an iterator for the decided transactions that starts from the offset that we pass
-    fn iter_starting_from_offset(
-        &self,
-        offset: TxOffset,
-    ) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        /*
-        We start the iteration to our omni_paxos entries from the offset that we pass,
-        until the decided index.
-         */
-        let log_iter = self.omni_paxos.read_entries(offset.0..self.omni_paxos.get_decided_idx());
-        let decided_entries: Vec<(TxOffset, TxData)> = log_iter.unwrap().iter().filter_map(|log_entry| {
-            match log_entry {
-                utilsLogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
-                _ => None,
-            }
-        }).collect();
 
-        Box::new(decided_entries.into_iter())
-    }
-    // this appends the transaction to the log
+    // Implementation of append_tx to add a new transaction entry
     fn append_tx(&mut self, tx_offset: TxOffset, tx_data: TxData) {
-        let write_entry = OmniLogEntry { tx_offset, tx_data};
+        // Creating a Log entry from the provided TxOffset and TxData
+        let log = TransactionLog {
+            tx_offset,
+            tx_data,
+        };
 
-        self.omni_paxos
-            .append(write_entry)
-            .expect("Failed to append entry")
+        // Appending the Log entry to the OmniPaxos instance
+        match self.omni_paxos.append(log) {
+            Ok(_) => println!("Entry appended to OmniPaxos."),
+            Err(e) => println!("Error appending entry to OmniPaxos: {:?}", e),
+        }
     }
-    // this reurns the index of the last decided entry
+
+    // Implementation of get_durable_tx_offset to get the durable transaction offset
     fn get_durable_tx_offset(&self) -> TxOffset {
+        // Getting the decided index from the OmniPaxos instance and returning as TxOffset
         TxOffset(self.omni_paxos.get_decided_idx())
     }
 }

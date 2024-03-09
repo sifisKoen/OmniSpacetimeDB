@@ -23,6 +23,8 @@ use std::time::Duration;
 
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(2);
 pub const TICK_PERIOD: Duration = Duration::from_millis(10);
+pub const UPDATE_TX_PERIOD: Duration = Duration::from_millis(5);
+pub const UPDATE_LEADER_PERIOD: Duration = Duration::from_millis(5);
 pub const BUFFER_SIZE: usize = 10000;
 
 pub struct NodeRunner {
@@ -58,6 +60,8 @@ impl NodeRunner {
     pub async fn run(&mut self) {
         let mut outgoing_interval = time::interval(OUTGOING_MESSAGE_PERIOD);
         let mut tick_interval = time::interval(TICK_PERIOD);
+        let mut update_tx = time::interval(UPDATE_TX_PERIOD);
+        let mut update_leader = time::interval(UPDATE_LEADER_PERIOD);
         //here we have an infinite loop in which the node enters when it starts running
         loop {
             //we run the following branches concurrently
@@ -72,8 +76,9 @@ impl NodeRunner {
                     .omnipaxos_durability
                     .omni_paxos
                     .tick();
-
-                    //we execute the update_leader function which performs updates on the node
+                },
+                //we execute the update_leader function which performs updates on the node
+                _= update_leader.tick() => {
                     self
                     .node
                     .lock()
@@ -84,6 +89,14 @@ impl NodeRunner {
                 _ = outgoing_interval.tick() => {
                     self
                     .send_outgoing_msgs().await;
+                },
+                //we apply the transactions that have been decided
+                _ = update_tx.tick() => {
+                    self
+                    .node
+                    .lock()
+                    .unwrap()
+                    .apply_replicated_txns();
                 },
                 //we receive the incoming messages from the other nodes
                 Some(in_message) = self.incoming.recv() => {
@@ -104,27 +117,29 @@ impl NodeRunner {
 
 pub struct Node {
     node_id: NodeId, // Unique identifier for the node
-                     // TODO Datastore and OmniPaxosDurability
+    // TODO Datastore and OmniPaxosDurability
     //we have the omnipaxos durability which contains the omnipaxos node
     omnipaxos_durability: OmniPaxosDurability,
     //we have the datastore which contains the data that the node stores
     datastore: example_datastore::ExampleDatastore,
     // this is the id of the leader of the cluster
     omnipaxos_cluster_leader: NodeId,
+    //this is the nodes in the network
+    network_nodes: Vec<NodeId>,
 
     
 }
 //here we implement the functions for the Node 
 impl Node {
     //this is the function that creates a new instance of the Node
-    pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability) -> Self {
+    pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability,nodes: Vec<NodeId>) -> Self {
         //todo!()
         Node{
             node_id,
             omnipaxos_durability:omni_durability,
             datastore: example_datastore::ExampleDatastore::new(),
-            //leader_id:NodeId
             omnipaxos_cluster_leader: node_id,
+            network_nodes: nodes,
 
         }
     }
@@ -139,40 +154,17 @@ impl Node {
             Some(leader) => leader,
             None => panic!("No leader elected")
         };
-        //we check if the leader has changed
-        if self.omnipaxos_cluster_leader != leader{
-            //if we were the leader and we are not the leader anymore
-            if self.omnipaxos_cluster_leader == self.node_id{
-                //we rollback the transactions that have not been replicated 
-                self.datastore.rollback_to_replicated_durability_offset().expect("There is nothing to roll back");
-                //we trim the state of the omnipaxos node
-                match self.omnipaxos_durability.omni_paxos
-                .trim(match self.datastore.get_replicated_offset() {
-                    Some(index) => Some(index.0),
-                    None => panic!("There is no replicated offset")
-                }) {
-                    Ok(_) => println!("Trimmed successfully!"),
-                    Err(_) => panic!("Couldn't trim any more!")
-                }
-            //if we became the leader
-            }else if self.node_id == leader {
-                //we apply the transactions
-                let  tx_box = self
-                .omnipaxos_durability
-                .iter_starting_from_offset(
-                    match self.datastore.get_replicated_offset(){
-                    Some(offset) => offset,
-                    None => panic!("There is no offset")
-                });
-                //we append them to the omnipaxos node
-                for  (tx_offset, tx_data) in tx_box {
-                    self.omnipaxos_durability.append_tx(tx_offset, tx_data);
-                }
 
-            }
-            //we update the leader id to the new leader
-            self.omnipaxos_cluster_leader = leader;    
+        if leader == self.node_id {
+            //we apply the transactions that have been decided
+            self.apply_replicated_txns();
+        } else {
+            //we rollback the transactions that have not been replicated
+            self.rollback_not_replicated_txns();
         }
+
+        //we update the leader id to the new leader
+        self.omnipaxos_cluster_leader = leader;    
         
     }
 
@@ -182,20 +174,38 @@ impl Node {
     fn apply_replicated_txns(&mut self) {
         //todo!()
         //we get the transactions that have been decided
-        let mut iter = self.omnipaxos_durability.omni_paxos.read_entries(0..self.omnipaxos_durability.omni_paxos.get_decided_idx()).unwrap();
-        //we filter the transactions that have been decided an store them in a vector
-        let decided_entries: Vec<(TxOffset, TxData)> = iter.iter().filter_map(|log_entry| {
-            match log_entry {
-                LogEntry::Decided(entry) => Some((entry.tx_offset.clone(), entry.tx_data.clone())),
-                _ => None,
-            }
-        }).collect();
+        //not from 0 but from the last replicated one in the node
+        let current_offset_option = self.datastore.get_replicated_offset();
+        let current_offset = match current_offset_option{
+            Some(offset) => offset,
+            None => TxOffset(0),
+        };
+
+        //we get the transactions from omnipaxos
+        let mut transactions_iter = self.omnipaxos_durability.iter_starting_from_offset(current_offset);
+
         //we apply the transactions to the datastore
-        for (offset, data) in decided_entries{
-            let mut transaction = self.datastore.begin_mut_tx();
-            transaction.set(offset.0.to_string(), format!("{:?}", data));
-            self.datastore.commit_mut_tx(transaction);
-        }  
+        while let Some((offset, data)) = transactions_iter.next() {
+            match self.datastore.replay_transaction(&data) {
+                //if we got ok we continue
+                Ok(_) => {}
+                Err(error) => {
+                    // If we fail to apply a transaction, we print it
+                    println!("{}",error);
+                }
+            }
+        }
+
+        //we advance the offset to the last decided transaction
+        self.advance_replicated_durability_offset().expect("There was an error when trying to advance the offset");
+
+    }
+
+    // Rollback transactions that were applied locally while we thought we were the leader
+    fn rollback_not_replicated_txns(&mut self) {
+        //we rollback the transactions that have not been replicated
+        self.datastore.rollback_to_replicated_durability_offset().expect("There was an error when trying to roll back");
+        self.advance_replicated_durability_offset().expect("There was an error when trying to change the offset");
     }
     
     pub fn begin_tx(
@@ -217,7 +227,20 @@ impl Node {
         &self,
     ) -> Result<<ExampleDatastore as Datastore<String, String>>::MutTx, DatastoreError> {
         //todo!()
-        Ok(self.datastore.begin_mut_tx())
+        //we get the current leader from the omnipaxos node
+        let leader_option=self.omnipaxos_durability.omni_paxos.get_current_leader();
+        match leader_option{
+            Some(leader)=> {
+                //if we are the leader we begin the transaction
+                if leader==self.node_id{
+                    Ok(self.datastore.begin_mut_tx())
+                //if we are not the leader we return an error
+                }else{
+                    Err(DatastoreError::default())
+                }
+            },
+            None => Err(DatastoreError::default()),
+        }
     }
 
     /// Commits a mutable transaction. Only the leader is allowed to do so.
@@ -226,20 +249,30 @@ impl Node {
         tx: <ExampleDatastore as Datastore<String, String>>::MutTx,
     ) -> Result<TxResult, DatastoreError> {
         //todo!()
-        self.datastore.commit_mut_tx(tx)
-
+        //we get the current leader from the omnipaxos node
+        let leader_option=self.omnipaxos_durability.omni_paxos.get_current_leader();
+        match leader_option{
+            Some(leader)=> {
+                //if we are the leader we commit the transaction
+                if leader==self.node_id{
+                    self.datastore.commit_mut_tx(tx)
+                //if we are not the leader we return an error
+                }else{
+                    Err(DatastoreError::default())
+                }
+            },
+            None => Err(DatastoreError::default()),
+        }
     }
 
     fn advance_replicated_durability_offset(
         &self,
     ) -> Result<(), crate::datastore::error::DatastoreError> {
         //todo!()
-        let result=self.datastore.get_replicated_offset();
-        match result{
-            Some(offset)=> self.datastore.advance_replicated_durability_offset(offset),
-            None => Err(DatastoreError::default()),
-        }
-        
+        // we get the decided index from omni
+        let offset = self.omnipaxos_durability.omni_paxos.get_decided_idx();
+        //we set the offset to the datastore
+        self.datastore.advance_replicated_durability_offset(TxOffset(offset))
     }
 }
 
