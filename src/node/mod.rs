@@ -2,7 +2,7 @@ use crate::datastore::error::DatastoreError;
 use crate::datastore::example_datastore::ExampleDatastore;
 use crate::datastore::tx_data::TxResult;
 use crate::durability::omnipaxos_durability::OmniPaxosDurability;
-use crate::durability::omnipaxos_durability::OmniLogEntry;
+use crate::durability::omnipaxos_durability::TransactionLog;
 use crate::durability::{DurabilityLayer, DurabilityLevel};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -30,8 +30,8 @@ pub const BUFFER_SIZE: usize = 10000;
 pub struct NodeRunner {
     pub node: Arc<Mutex<Node>>,
     // TODO Messaging and running
-    pub incoming: mpsc::Receiver<Message<OmniLogEntry>>,
-    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
+    pub incoming: mpsc::Receiver<Message<TransactionLog>>,
+    pub outgoing: HashMap<NodeId, mpsc::Sender<Message<TransactionLog>>>,
 }
 
 impl NodeRunner {
@@ -299,8 +299,8 @@ mod tests {
 
     #[allow(clippy::type_complexity)]
     fn initialise_channels() -> (
-        HashMap<NodeId, mpsc::Sender<Message<OmniLogEntry>>>,
-        HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>,
+        HashMap<NodeId, mpsc::Sender<Message<TransactionLog>>>,
+        HashMap<NodeId, mpsc::Receiver<Message<TransactionLog>>>,
     ) {
 
         let mut sender_channels = HashMap::new();
