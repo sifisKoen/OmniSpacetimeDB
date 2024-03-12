@@ -6,7 +6,7 @@ pub mod node;
 
 use std::time::Duration;
 use std::{collections::HashMap, error::Error, sync::{Arc, Mutex}};
-use durability::omnipaxos_durability::OmniLogEntry;
+use durability::omnipaxos_durability::TransactionLog;
 use durability::omnipaxos_durability::OmniPaxosDurability;
 use node::Node;
 use node::NodeRunner;
@@ -27,8 +27,8 @@ const SERVERS: [NodeId; 3]=[1,2,3];
 
 #[allow(clippy::type_complexity)]
 fn initialise_channels_between_nodes() -> (
-    HashMap<NodeId,mpsc::Sender<Message<OmniLogEntry>>>,
-    HashMap<NodeId, mpsc::Receiver<Message<OmniLogEntry>>>
+    HashMap<NodeId,mpsc::Sender<Message<TransactionLog>>>,
+    HashMap<NodeId, mpsc::Receiver<Message<TransactionLog>>>
 ){
     let mut sender_channels = HashMap::new();
     let mut receiver_channels = HashMap::new();

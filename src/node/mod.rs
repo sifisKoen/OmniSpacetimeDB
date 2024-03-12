@@ -23,6 +23,7 @@ use std::time::Duration;
 
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(2);
 pub const TICK_PERIOD: Duration = Duration::from_millis(10);
+pub const ELECTION_TICK_TIMEOUT: u64 = 5;
 pub const UPDATE_TX_PERIOD: Duration = Duration::from_millis(5);
 pub const UPDATE_LEADER_PERIOD: Duration = Duration::from_millis(5);
 pub const BUFFER_SIZE: usize = 10000;
@@ -122,8 +123,6 @@ pub struct Node {
     omnipaxos_durability: OmniPaxosDurability,
     //we have the datastore which contains the data that the node stores
     datastore: example_datastore::ExampleDatastore,
-    // this is the id of the leader of the cluster
-    omnipaxos_cluster_leader: NodeId,
     //this is the nodes in the network
     network_nodes: Vec<NodeId>,
 
@@ -138,7 +137,6 @@ impl Node {
             node_id,
             omnipaxos_durability:omni_durability,
             datastore: example_datastore::ExampleDatastore::new(),
-            omnipaxos_cluster_leader: node_id,
             network_nodes: nodes,
 
         }
@@ -162,9 +160,7 @@ impl Node {
             //we rollback the transactions that have not been replicated
             self.rollback_not_replicated_txns();
         }
-
-        //we update the leader id to the new leader
-        self.omnipaxos_cluster_leader = leader;    
+    
         
     }
 
@@ -172,7 +168,6 @@ impl Node {
     /// We need to be careful with which nodes should do this according to desired
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
-        //todo!()
         //we get the transactions that have been decided
         //not from 0 but from the last replicated one in the node
         let current_offset_option = self.datastore.get_replicated_offset();
@@ -212,12 +207,10 @@ impl Node {
         &self,
         durability_level: DurabilityLevel,
     ) -> <ExampleDatastore as Datastore<String, String>>::Tx {
-        //todo!()
         self.datastore.begin_tx(durability_level)
     }
 
     pub fn release_tx(&self, tx: <ExampleDatastore as Datastore<String, String>>::Tx) {
-        //todo!()
         self.datastore.release_tx(tx)
 
     }
@@ -226,7 +219,6 @@ impl Node {
     pub fn begin_mut_tx(
         &self,
     ) -> Result<<ExampleDatastore as Datastore<String, String>>::MutTx, DatastoreError> {
-        //todo!()
         //we get the current leader from the omnipaxos node
         let leader_option=self.omnipaxos_durability.omni_paxos.get_current_leader();
         match leader_option{
@@ -270,9 +262,9 @@ impl Node {
     ) -> Result<(), crate::datastore::error::DatastoreError> {
         //todo!()
         // we get the decided index from omni
-        let offset = self.omnipaxos_durability.omni_paxos.get_decided_idx();
+        let offset = self.omnipaxos_durability.get_durable_tx_offset();
         //we set the offset to the datastore
-        self.datastore.advance_replicated_durability_offset(TxOffset(offset))
+        self.datastore.advance_replicated_durability_offset(offset) 
     }
 }
 
@@ -294,24 +286,25 @@ mod tests {
     use tokio::runtime::{Builder, Runtime};
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
+    use crate::durability;
+    use omnipaxos::*;
 
-    const SERVERS: [NodeId; 3] = [1, 2, 3];
+    const SERVERS: [NodeId; 3]=[1,2,3];
 
     #[allow(clippy::type_complexity)]
-    fn initialise_channels() -> (
-        HashMap<NodeId, mpsc::Sender<Message<TransactionLog>>>,
-        HashMap<NodeId, mpsc::Receiver<Message<TransactionLog>>>,
-    ) {
-
+    fn initialise_channels_between_nodes() -> (
+        HashMap<NodeId,mpsc::Sender<Message<TransactionLog>>>,
+        HashMap<NodeId, mpsc::Receiver<Message<TransactionLog>>>
+    ){
         let mut sender_channels = HashMap::new();
         let mut receiver_channels = HashMap::new();
-
-        for pid in SERVERS {
+        for pid in SERVERS{//each process corresponds to a node
             let (sender, receiver) = mpsc::channel(BUFFER_SIZE);
             sender_channels.insert(pid, sender);
             receiver_channels.insert(pid, receiver);
         }
-        (sender_channels, receiver_channels)
+    
+        (sender_channels,receiver_channels)
     }
 
     fn create_runtime() -> Runtime {
@@ -324,9 +317,31 @@ mod tests {
 
     fn spawn_nodes(runtime: &mut Runtime) -> HashMap<NodeId, (Arc<Mutex<Node>>, JoinHandle<()>)> {
         let mut nodes = HashMap::new();
-        let (sender_channels, mut receiver_channels) = initialise_channels();
+        let (sender_channels, mut receiver_channels) = initialise_channels_between_nodes();
         for pid in SERVERS {
-            todo!("spawn the nodes")
+            let server_config = ServerConfig{
+                pid,
+                election_tick_timeout: ELECTION_TICK_TIMEOUT,
+                ..Default::default()
+            };
+            let cluster_config = ClusterConfig{
+                configuration_id: 1,
+                nodes: SERVERS.into(),
+                ..Default::default()
+            };
+            let omni_durability = OmniPaxosDurability::new(server_config.clone(), cluster_config.clone()).unwrap();
+            let node: Arc<Mutex<Node>> = Arc::new(Mutex::new(Node::new(pid, omni_durability, SERVERS.to_vec())));
+            let mut node_runner = NodeRunner {
+                node: node.clone(),
+                incoming: receiver_channels.remove(&pid).unwrap(),
+                outgoing: sender_channels.clone(),
+            };
+            let join_handle = runtime.spawn({
+                async move {
+                    node_runner.run().await;
+                }
+            });
+            nodes.insert(pid, ( node, join_handle));
         }
         nodes
     }
