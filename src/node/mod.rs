@@ -24,8 +24,8 @@ use std::time::Duration;
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(2);
 pub const TICK_PERIOD: Duration = Duration::from_millis(10);
 pub const ELECTION_TICK_TIMEOUT: u64 = 5;
-pub const UPDATE_TX_PERIOD: Duration = Duration::from_millis(5);
-pub const UPDATE_LEADER_PERIOD: Duration = Duration::from_millis(5);
+pub const UPDATE_TX_PERIOD: Duration = Duration::from_millis(500);
+pub const UPDATE_LEADER_PERIOD: Duration = Duration::from_millis(500);
 pub const BUFFER_SIZE: usize = 10000;
 
 pub struct NodeRunner {
@@ -148,12 +148,9 @@ impl Node {
     /// memory that have not been replicated yet.
     pub fn update_leader(&mut self){
         //we get the current leader from the omnipaxos node    
-        let leader = match self.omnipaxos_durability.omni_paxos.get_current_leader() {
-            Some(leader) => leader,
-            None => panic!("No leader elected")
-        };
 
-        if leader == self.node_id {
+        let leader_id = self.omnipaxos_durability.omni_paxos.get_current_leader();
+        if leader_id == Some(self.node_id) {
             //we apply the transactions that have been decided
             self.apply_replicated_txns();
         } else {
@@ -345,4 +342,43 @@ mod tests {
         }
         nodes
     }
+
+    #[test]
+    //First test case (1)
+    fn test_leader_election() {
+        let mut runtime = create_runtime();
+        let nodes = spawn_nodes(&mut runtime);
+        std::thread::sleep(std::time::Duration::from_secs(500));
+        let (node,_)=nodes.get(&1).unwrap();
+        let leader_id=node
+                        .lock()
+                        .unwrap()
+                        .omnipaxos_durability
+                        .omni_paxos
+                        .get_current_leader()
+                        .expect("No Leader Found"); 
+        
+        let leader = nodes.get(&leader_id).unwrap();
+        let mut transaction =leader.0.lock().unwrap().begin_mut_tx().unwrap();
+        leader.0.lock().unwrap().datastore.set_mut_tx(&mut transaction, "marco".to_string(), "polo".to_string());
+        let commit_transaction=leader.0.lock().unwrap().commit_mut_tx(transaction).unwrap();
+        leader.0.lock().unwrap().omnipaxos_durability.append_tx(commit_transaction.tx_offset, commit_transaction.tx_data);
+        std::thread::sleep(TICK_PERIOD);
+        let leader_iter = leader.0.lock().unwrap().omnipaxos_durability.iter();
+        let leader_offset = leader.0.lock().unwrap().omnipaxos_durability.get_durable_tx_offset();
+        //use collect to convert the iterator to a vector
+        let leader_txns: Vec<_> = leader_iter.collect();
+        for pid in SERVERS{
+            let (node,_)=nodes.get(&pid).unwrap();
+            if node.lock().unwrap().node_id!=leader_id{
+                let node_iter = node.lock().unwrap().omnipaxos_durability.iter();
+                let node_txns: Vec<_> = node_iter.collect();
+                assert_eq!(leader_txns.len(), node_txns.len());
+                assert_eq!(leader_offset, node.lock().unwrap().omnipaxos_durability.get_durable_tx_offset());
+            }
+           
+        }
+
+    }
+
 }
