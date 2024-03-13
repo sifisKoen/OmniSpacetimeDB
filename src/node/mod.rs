@@ -93,11 +93,22 @@ impl NodeRunner {
                 },
                 //we apply the transactions that have been decided
                 _ = update_tx.tick() => {
-                    self
-                    .node
-                    .lock()
-                    .unwrap()
-                    .apply_replicated_txns();
+                    //the leader applies the transactions that have been decided
+                    let current_leader_id =self
+                                            .node
+                                            .lock()
+                                            .unwrap()
+                                            .omnipaxos_durability
+                                            .omni_paxos
+                                            .get_current_leader();
+
+                    if current_leader_id == Some(self.node.lock().unwrap().node_id) {
+                        self
+                        .node
+                        .lock()
+                        .unwrap()
+                        .apply_replicated_txns();
+                    }
                 },
                 //we receive the incoming messages from the other nodes
                 Some(in_message) = self.incoming.recv() => {
@@ -118,7 +129,6 @@ impl NodeRunner {
 
 pub struct Node {
     node_id: NodeId, // Unique identifier for the node
-    // TODO Datastore and OmniPaxosDurability
     //we have the omnipaxos durability which contains the omnipaxos node
     omnipaxos_durability: OmniPaxosDurability,
     //we have the datastore which contains the data that the node stores
@@ -132,7 +142,6 @@ pub struct Node {
 impl Node {
     //this is the function that creates a new instance of the Node
     pub fn new(node_id: NodeId, omni_durability: OmniPaxosDurability,nodes: Vec<NodeId>) -> Self {
-        //todo!()
         Node{
             node_id,
             omnipaxos_durability:omni_durability,
@@ -165,13 +174,13 @@ impl Node {
     /// We need to be careful with which nodes should do this according to desired
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
+
+        //we advance the offset to the last decided transaction
+        self.advance_replicated_durability_offset().expect("There was an error when trying to advance the offset");
+
         //we get the transactions that have been decided
         //not from 0 but from the last replicated one in the node
-        let current_offset_option = self.datastore.get_replicated_offset();
-        let current_offset = match current_offset_option{
-            Some(offset) => offset,
-            None => TxOffset(0),
-        };
+        let current_offset = self.omnipaxos_durability.get_durable_tx_offset();
 
         //we get the transactions from omnipaxos
         let mut transactions_iter = self.omnipaxos_durability.iter_starting_from_offset(current_offset);
@@ -188,16 +197,15 @@ impl Node {
             }
         }
 
-        //we advance the offset to the last decided transaction
-        self.advance_replicated_durability_offset().expect("There was an error when trying to advance the offset");
-
+        
     }
 
     // Rollback transactions that were applied locally while we thought we were the leader
     fn rollback_not_replicated_txns(&mut self) {
         //we rollback the transactions that have not been replicated
-        self.datastore.rollback_to_replicated_durability_offset().expect("There was an error when trying to roll back");
         self.advance_replicated_durability_offset().expect("There was an error when trying to change the offset");
+
+        self.datastore.rollback_to_replicated_durability_offset().expect("There was an error when trying to roll back");
     }
     
     pub fn begin_tx(
@@ -237,7 +245,6 @@ impl Node {
         &mut self,
         tx: <ExampleDatastore as Datastore<String, String>>::MutTx,
     ) -> Result<TxResult, DatastoreError> {
-        //todo!()
         //we get the current leader from the omnipaxos node
         let leader_option=self.omnipaxos_durability.omni_paxos.get_current_leader();
         match leader_option{
@@ -257,7 +264,6 @@ impl Node {
     fn advance_replicated_durability_offset(
         &self,
     ) -> Result<(), crate::datastore::error::DatastoreError> {
-        //todo!()
         // we get the decided index from omni
         let offset = self.omnipaxos_durability.get_durable_tx_offset();
         //we set the offset to the datastore
@@ -327,7 +333,7 @@ mod tests {
                 ..Default::default()
             };
             let omni_durability = OmniPaxosDurability::new(server_config.clone(), cluster_config.clone()).unwrap();
-            let node: Arc<Mutex<Node>> = Arc::new(Mutex::new(Node::new(pid, omni_durability, SERVERS.to_vec())));
+            let node: Arc<Mutex<Node>> = Arc::new(Mutex::new(Node::new(pid, omni_durability, SERVERS.into())));
             let mut node_runner = NodeRunner {
                 node: node.clone(),
                 incoming: receiver_channels.remove(&pid).unwrap(),
@@ -348,7 +354,7 @@ mod tests {
     fn test_leader_election() {
         let mut runtime = create_runtime();
         let nodes = spawn_nodes(&mut runtime);
-        std::thread::sleep(std::time::Duration::from_secs(500));
+        std::thread::sleep(std::time::Duration::from_secs(5));
         let (node,_)=nodes.get(&1).unwrap();
         let leader_id=node
                         .lock()
