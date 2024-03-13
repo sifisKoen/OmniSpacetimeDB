@@ -12,6 +12,7 @@ parking_lot = { version = "0.12.1", features = ["send_guard", "arc_lock"] }
 omnipaxos = "0.2.2"
 omnipaxos_storage = "0.2.2"
 tokio = {version = "1.36.0", features = ["full"]}
+rand = "0.8.4"
 
 [dev-dependencies]
 tempdir = "0.3.7"

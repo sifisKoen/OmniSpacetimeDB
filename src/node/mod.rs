@@ -13,6 +13,7 @@ use std::borrow::Borrow;
 use tokio::{sync::mpsc, time};
 use crate::datastore::*;
 use crate::datastore::tx_data::*;
+use rand::seq::SliceRandom;
 //use datastore::tx_data::TxOffset;
 
 
@@ -24,8 +25,8 @@ use std::time::Duration;
 pub const OUTGOING_MESSAGE_PERIOD: Duration = Duration::from_millis(2);
 pub const TICK_PERIOD: Duration = Duration::from_millis(10);
 pub const ELECTION_TICK_TIMEOUT: u64 = 5;
-pub const UPDATE_TX_PERIOD: Duration = Duration::from_millis(500);
-pub const UPDATE_LEADER_PERIOD: Duration = Duration::from_millis(500);
+pub const UPDATE_TX_PERIOD: Duration = Duration::from_millis(5000);
+pub const UPDATE_LEADER_PERIOD: Duration = Duration::from_millis(5000);
 pub const BUFFER_SIZE: usize = 10000;
 
 pub struct NodeRunner {
@@ -284,6 +285,7 @@ mod tests {
     use crate::node::*;
     use omnipaxos::messages::Message;
     use omnipaxos::util::NodeId;
+    use rand::random;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tokio::runtime::{Builder, Runtime};
@@ -351,11 +353,19 @@ mod tests {
 
     #[test]
     //First test case (1)
+    //Find the leader and commit a transaction. 
+    //Show that the transaction is really *chosen* (according to our definition in Paxos)
+    //among the nodes.
     fn test_leader_election() {
+        //start the runtime
         let mut runtime = create_runtime();
+        //spawn the nodes
         let nodes = spawn_nodes(&mut runtime);
+        //wait for the leader to be elected
         std::thread::sleep(std::time::Duration::from_secs(5));
+        //select a random node
         let (node,_)=nodes.get(&1).unwrap();
+        //get the leader from the omnipaxos node
         let leader_id=node
                         .lock()
                         .unwrap()
@@ -365,17 +375,24 @@ mod tests {
                         .expect("No Leader Found"); 
         
         let leader = nodes.get(&leader_id).unwrap();
+        //create a transaction
         let mut transaction =leader.0.lock().unwrap().begin_mut_tx().unwrap();
+        //set the transaction
         leader.0.lock().unwrap().datastore.set_mut_tx(&mut transaction, "marco".to_string(), "polo".to_string());
+        //commit the transaction
         let commit_transaction=leader.0.lock().unwrap().commit_mut_tx(transaction).unwrap();
+        //append the transaction to the omnipaxos node
         leader.0.lock().unwrap().omnipaxos_durability.append_tx(commit_transaction.tx_offset, commit_transaction.tx_data);
         std::thread::sleep(TICK_PERIOD);
+        //get the transactions
         let leader_iter = leader.0.lock().unwrap().omnipaxos_durability.iter();
         let leader_offset = leader.0.lock().unwrap().omnipaxos_durability.get_durable_tx_offset();
         //use collect to convert the iterator to a vector
         let leader_txns: Vec<_> = leader_iter.collect();
+        //check that the transactions are the same for all the nodes
         for pid in SERVERS{
             let (node,_)=nodes.get(&pid).unwrap();
+            //other than the leader
             if node.lock().unwrap().node_id!=leader_id{
                 let node_iter = node.lock().unwrap().omnipaxos_durability.iter();
                 let node_txns: Vec<_> = node_iter.collect();
@@ -386,5 +403,82 @@ mod tests {
         }
 
     }
+
+    #[test]
+    //Second test case (2)
+    //Find the leader and commit a transaction. 
+    //Kill the leader and show that another node will be elected 
+    //and that the replicated state is still correct.
+    fn test_leader_election_after_leader_failure() {
+        //start the runtime
+        let mut runtime = create_runtime();
+        //spawn the nodes
+        let mut nodes = spawn_nodes(&mut runtime);
+        //wait for the leader to be elected
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        //select a random node
+        let (node,_)=nodes.get(&1).unwrap();
+        //get the leader from the omnipaxos node
+        let leader_id=node
+                        .lock()
+                        .unwrap()
+                        .omnipaxos_durability
+                        .omni_paxos
+                        .get_current_leader()
+                        .expect("No Leader Found"); 
+        println!("The initial leader is {}",leader_id);
+        
+        let leader = nodes.get(&leader_id).unwrap();
+        //create a transaction
+        let mut transaction =leader.0.lock().unwrap().begin_mut_tx().unwrap();
+        //set the transaction
+        leader.0.lock().unwrap().datastore.set_mut_tx(&mut transaction, "marco".to_string(), "polo".to_string());
+        //commit the transaction
+        let commit_transaction=leader.0.lock().unwrap().commit_mut_tx(transaction).unwrap();
+        //append the transaction to the omnipaxos node
+        leader.0.lock().unwrap().omnipaxos_durability.append_tx(commit_transaction.tx_offset, commit_transaction.tx_data);
+        std::thread::sleep(TICK_PERIOD);
+
+
+        std::thread::sleep(TICK_PERIOD);
+
+        let leader_transactions_iter = leader.0.lock().unwrap().omnipaxos_durability.iter();
+        let leader_txns: Vec<_> = leader_transactions_iter.collect();
+        
+        //kill the leader
+        leader.1.abort();
+
+        nodes.remove(&leader_id);
+
+        //wait for the new leader to be elected
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        
+        let remaining_nodes:Vec<&u64> = SERVERS.iter().filter(|&&id| id != leader_id).collect();
+       
+        //select a random node
+        let (node,_)=nodes.get(remaining_nodes.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+        println!("leader killed {:?}", leader_id);
+        println!("alive servers: {:?}", remaining_nodes);
+        let new_leader_id=node
+                            .lock()
+                            .unwrap()
+                            .omnipaxos_durability
+                            .omni_paxos
+                            .get_current_leader()
+                            .expect("No Leader Found");
+        //check that the new leader is different from the old leader
+        assert_ne!(leader_id, new_leader_id);
+        println!("The new leader is {}",new_leader_id);
+        let new_leader = nodes.get(&new_leader_id).unwrap();
+        let new_leader_transactions_iter = new_leader.0.lock().unwrap().omnipaxos_durability.iter();
+        let new_leader_txns: Vec<_> = new_leader_transactions_iter.collect();
+        //check the status
+        println!("The old leader transactions are {:?}",leader_txns);
+        println!("The new leader transactions are {:?}",new_leader_txns);
+
+        assert_eq!(leader_txns.len(), new_leader_txns.len());
+
+    }
+
 
 }
