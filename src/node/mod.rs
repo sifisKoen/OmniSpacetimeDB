@@ -50,11 +50,13 @@ impl NodeRunner {
         //We iterate over the messages and send them to the other nodes
         for message in all_outgoing_omnipaxos_messages{
             let receiver = message.get_receiver();
-            let channel = self
-                .outgoing
-                .get_mut(&receiver)
-                .expect("There is no channel for the receiver");
-            let _ = channel.send(message).await;
+            if self.node.lock().unwrap().network_nodes.contains(&receiver) {
+                let channel = self
+                    .outgoing
+                    .get_mut(&receiver)
+                    .expect("There is no channel for the receiver");
+                let _ = channel.send(message).await;
+            }
         }
     }
 
@@ -287,13 +289,15 @@ mod tests {
     use omnipaxos::util::NodeId;
     use rand::random;
     use std::collections::HashMap;
+    use std::os::unix::process;
     use std::sync::{Arc, Mutex};
-    use tokio::runtime::{Builder, Runtime};
+    use tokio::runtime::{self, Builder, Runtime};
     use tokio::sync::mpsc;
     use tokio::task::JoinHandle;
     use crate::durability;
     use omnipaxos::*;
 
+//    const SERVERS: [NodeId; 5]=[1,2,3,4,5];
     const SERVERS: [NodeId; 3]=[1,2,3];
 
     #[allow(clippy::type_complexity)]
@@ -480,5 +484,126 @@ mod tests {
 
     }
 
+
+    //Fourth test case (4)
+    // Simulate the 3 partial connectivity scenarios from the OmniPaxos
+    // liveness lecture. Does the system recover? 
+    //*NOTE* for this test you may need to modify the messaging logic.
+    //added an if statement to the send_outgoing_msgs function
+    #[test]
+    fn quorum_loss_scenario(){
+        //start the runtime
+        let mut runtime = create_runtime();
+        //spawn the nodes
+        let cluster_nodes = spawn_nodes(&mut runtime);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let (temp_server, _) = cluster_nodes.get(SERVERS.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+        
+        let cluster_leader = temp_server
+        .lock()
+        .unwrap()
+        .omnipaxos_durability
+        .omni_paxos
+        .get_current_leader()
+        .expect("Failed to get leader");
+
+        println!("The initial cluster leader is {}", cluster_leader);
+
+        let followers:Vec<&u64> = SERVERS.iter().filter(|&&id| id != cluster_leader).collect();
+
+        let next_leader = followers.choose(&mut rand::thread_rng()).unwrap() as &u64;
+        println!("The next leader will be {}", next_leader);
+        for process_id in SERVERS {
+            if process_id != next_leader.clone() {
+                let (node, _) = cluster_nodes.get(&process_id).unwrap();
+                for not_next_leader in SERVERS {
+                    if not_next_leader != next_leader.clone() {
+                        node.lock().unwrap().network_nodes=vec![next_leader.clone()];
+                    }
+                }
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(500));
+        let new_cluster_leader = cluster_nodes
+        .get(&next_leader)
+        .unwrap()
+        .0
+        .lock()
+        .unwrap()
+        .omnipaxos_durability
+        .omni_paxos
+        .get_current_leader()
+        .expect("Failed to get leader");
+
+        println!("The new cluster leader is {}", new_cluster_leader);
+    }
+
+    #[test]
+    fn chained_disconnections_scenario(){
+        //start the runtime
+        let mut runtime = create_runtime();
+        //spawn the nodes
+        let cluster_nodes = spawn_nodes(&mut runtime);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let (temp_server, _) = cluster_nodes.get(SERVERS.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+        
+        let cluster_leader = temp_server
+        .lock()
+        .unwrap()
+        .omnipaxos_durability
+        .omni_paxos
+        .get_current_leader()
+        .expect("Failed to get leader");
+
+        println!("The initial cluster leader is {}", cluster_leader);
+        let followers: Vec<&u64> = SERVERS.iter().filter(|&&id| id != cluster_leader).collect();
+
+        let removed_follower = followers.choose(&mut rand::thread_rng()).unwrap() as &u64;
+        println!("The removed follower is {}", removed_follower);
+        let mut cluster_leader_node = cluster_nodes
+            .get(&cluster_leader)
+            .unwrap()
+            .0
+            .lock()
+            .unwrap();
+
+        let index = cluster_leader_node
+            .network_nodes
+            .iter()
+            .position(|&x| x == *removed_follower)
+            .unwrap();
+        cluster_leader_node.network_nodes.remove(index);
+        println!("Connections for the old leader {:?}", cluster_leader_node.network_nodes);
+
+        let mut removed_follower_node = cluster_nodes
+        .get(removed_follower)
+        .unwrap()
+        .0
+        .lock()
+        .unwrap();
+
+        let removed_follower_index = removed_follower_node
+            .network_nodes
+            .iter()
+            .position(|&x| x == cluster_leader)
+            .unwrap();
+
+        removed_follower_node.network_nodes.remove(removed_follower_index);
+        println!("Connections for the removed follower {:?}", removed_follower_node.network_nodes);
+        
+        std::thread::sleep(Duration::from_millis(800));
+        
+        for _i in 0..3{
+            let new_cluster_leader = removed_follower_node
+            .omnipaxos_durability
+            .omni_paxos
+            .get_current_leader()
+            .expect("Failed to get leader");
+            println!("The new cluster leader is {}", new_cluster_leader);
+            std::thread::sleep(Duration::from_millis(500));
+            
+        }
+    }
 
 }
