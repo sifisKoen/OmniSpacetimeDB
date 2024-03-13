@@ -368,7 +368,8 @@ mod tests {
         //wait for the leader to be elected
         std::thread::sleep(std::time::Duration::from_secs(5));
         //select a random node
-        let (node,_)=nodes.get(&1).unwrap();
+        let (node, _) = nodes.get(SERVERS.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+
         //get the leader from the omnipaxos node
         let leader_id=node
                         .lock()
@@ -421,7 +422,8 @@ mod tests {
         //wait for the leader to be elected
         std::thread::sleep(std::time::Duration::from_secs(5));
         //select a random node
-        let (node,_)=nodes.get(&1).unwrap();
+        let (node, _) = nodes.get(SERVERS.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+
         //get the leader from the omnipaxos node
         let leader_id=node
                         .lock()
@@ -481,6 +483,95 @@ mod tests {
         println!("The new leader transactions are {:?}",new_leader_txns);
 
         assert_eq!(leader_txns.len(), new_leader_txns.len());
+
+    }
+
+    //Third test case (3)
+    /// Find the leader and commit a transaction. 
+    /// Disconnect the leader from the other nodes and
+    /// continue to commit transactions before the OmniPaxos election timeout.
+    #[test]
+    fn disconnect_leader_commit_transactions(){
+        //start the runtime
+        let mut runtime = create_runtime();
+        //spawn the nodes
+        let cluster_nodes = spawn_nodes(&mut runtime);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let (temp_server, _) = cluster_nodes.get(SERVERS.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+        
+        let cluster_leader = temp_server
+        .lock()
+        .unwrap()
+        .omnipaxos_durability
+        .omni_paxos
+        .get_current_leader()
+        .expect("Failed to get leader");
+
+        let (cluster_leader_node, _) = cluster_nodes.get(&cluster_leader).unwrap();
+
+        println!("The initial cluster leader is {}", cluster_leader);
+        
+        //lets check the offset now
+        let initial_offset = cluster_leader_node.lock().unwrap().datastore.get_cur_offset().unwrap();
+        println!("The current offset in the leader is {:?}", initial_offset.0);
+
+
+        let mut transaction =cluster_leader_node.lock().unwrap().begin_mut_tx().unwrap();
+        //set the transaction
+        cluster_leader_node.lock().unwrap().datastore.set_mut_tx(&mut transaction, "marco".to_string(), "polo".to_string());
+        //commit the transaction
+        let commit_transaction=cluster_leader_node.lock().unwrap().commit_mut_tx(transaction).unwrap();
+        //append the transaction to the omnipaxos node
+        cluster_leader_node.lock().unwrap().omnipaxos_durability.append_tx(commit_transaction.tx_offset, commit_transaction.tx_data);
+        
+        //we wait for the transaction to be replicated
+        std::thread::sleep(TICK_PERIOD);
+        let current_offset = cluster_leader_node.lock().unwrap().datastore.get_cur_offset().unwrap();
+
+        println!("The offset in the leader is {:?}", current_offset.0);
+
+        //we disconnect the leader from the other nodes
+        for process_id in SERVERS {
+            if process_id != cluster_leader {//if it is not the leader just remove the leader from the network nodes
+                let (node, _) = cluster_nodes.get(&process_id).unwrap();
+                //we remove the leader from the other nodes
+                let leader_index = node
+                .lock()
+                .unwrap()
+                .network_nodes
+                .iter()
+                .position(|&x| x == cluster_leader)
+                .unwrap();
+
+                node.lock().unwrap().network_nodes.remove(leader_index);
+            }
+            else{//if it is the leader we remove the connections to the other nodes
+                let (node, _) = cluster_nodes.get(&process_id).unwrap();
+                node.lock().unwrap().network_nodes=vec![];
+
+            }
+        }
+
+        let mut transaction =cluster_leader_node.lock().unwrap().begin_mut_tx().unwrap();
+        //set the transaction
+        cluster_leader_node.lock().unwrap().datastore.set_mut_tx(&mut transaction, "marco1".to_string(), "polo1".to_string());
+        //commit the transaction
+        let commit_transaction=cluster_leader_node.lock().unwrap().commit_mut_tx(transaction).unwrap();
+        //append the transaction to the omnipaxos node
+        cluster_leader_node.lock().unwrap().omnipaxos_durability.append_tx(commit_transaction.tx_offset, commit_transaction.tx_data);
+        
+        //we wait for the transaction to be replicated
+        std::thread::sleep(TICK_PERIOD);
+        let current_offset = cluster_leader_node.lock().unwrap().datastore.get_cur_offset().unwrap();
+
+        println!("The offset in the leader after is has been disconnected is {:?}", current_offset.0);
+        
+        std::thread::sleep(TICK_PERIOD*5);
+
+        println!("The offset in the leader after is has been disconnected for a while is {:?}", current_offset.0);
+
+
+
 
     }
 
