@@ -297,8 +297,8 @@ mod tests {
     use crate::durability;
     use omnipaxos::*;
 
-//    const SERVERS: [NodeId; 5]=[1,2,3,4,5];
-    const SERVERS: [NodeId; 3]=[1,2,3];
+    const SERVERS: [NodeId; 5]=[1,2,3,4,5];
+//    const SERVERS: [NodeId; 3]=[1,2,3];
 
     #[allow(clippy::type_complexity)]
     fn initialise_channels_between_nodes() -> (
@@ -491,7 +491,7 @@ mod tests {
     //*NOTE* for this test you may need to modify the messaging logic.
     //added an if statement to the send_outgoing_msgs function
     #[test]
-    fn quorum_loss_scenario(){
+    fn quorum_loss_scenario(){//set SERVERS to 5
         //start the runtime
         let mut runtime = create_runtime();
         //spawn the nodes
@@ -540,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn chained_disconnections_scenario(){
+    fn chained_disconnections_scenario(){// set SERVERS to 3
         //start the runtime
         let mut runtime = create_runtime();
         //spawn the nodes
@@ -604,6 +604,70 @@ mod tests {
             std::thread::sleep(Duration::from_millis(500));
             
         }
+    }
+
+    #[test]
+    fn constrained_election_scenario(){//set SERVERS to 5
+        //start the runtime
+        let mut runtime = create_runtime();
+        //spawn the nodes
+        let cluster_nodes = spawn_nodes(&mut runtime);
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        //get a random node
+        let (temp_server, _) = cluster_nodes.get(SERVERS.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+        
+        let cluster_leader = temp_server
+        .lock()
+        .unwrap()
+        .omnipaxos_durability
+        .omni_paxos
+        .get_current_leader()
+        .expect("Failed to get leader");
+
+        println!("The initial cluster leader is {}", cluster_leader);
+
+
+        let followers: Vec<&u64> = SERVERS.iter().filter(|&&id| id != cluster_leader).collect();
+
+        let expected_leader_id = followers.choose(&mut rand::thread_rng()).unwrap() as &u64;
+        println!("The expected leader is {}", expected_leader_id);
+        //we iterate over the network nodes
+        for node_id in SERVERS {
+            //if we find the leader we have to disconnect it from the other nodes
+            if node_id==cluster_leader{
+                //we get the node from the cluster nodes
+                let (node, _) = cluster_nodes.get(&node_id).unwrap();
+                //we disconnect the leader from the other nodes
+                node.lock().unwrap().network_nodes=vec![];
+                println!("Connections for the old leader {:?}", node.lock().unwrap().network_nodes);
+                
+            //for the rest of the nodes we disconnect them from everyone but the expected leader
+            }else if node_id != expected_leader_id.clone() {
+                let (node, _) = cluster_nodes.get(&node_id).unwrap();
+                node.lock().unwrap().network_nodes=vec![expected_leader_id.clone()];
+                print!("Connections for the node {}", node_id);
+                println!(" {:?}", node.lock().unwrap().network_nodes);
+  
+            }
+
+        }
+        //we wait for the new leader to be elected
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        //we get a random node
+        let (temp_server, _) = cluster_nodes.get(SERVERS.choose(&mut rand::thread_rng()).unwrap()).unwrap();
+        //we get the new leader from the omnipaxos node
+        let new_cluster_leader = temp_server
+        .lock()
+        .unwrap()
+        .omnipaxos_durability
+        .omni_paxos
+        .get_current_leader()
+        .expect("Failed to get leader");
+
+        println!("The new cluster leader is {}", new_cluster_leader);
+        assert_eq!(new_cluster_leader, expected_leader_id.clone());
+
+
     }
 
 }
