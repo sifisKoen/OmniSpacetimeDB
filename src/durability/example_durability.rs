@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::{Read, Write, Seek, SeekFrom},
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -155,9 +155,21 @@ impl DurabilityLayer for ExampleDurabilityLayer {
 
     fn iter_starting_from_offset(
         &self,
-        _offset: TxOffset,
+        offset: TxOffset,
     ) -> Box<dyn Iterator<Item = (TxOffset, TxData)>> {
-        todo!()
+        // Open the log file for reading.
+        let mut file = File::open(&self.filepath).expect("Failed to open log file");
+
+        // Move the cursor to the desired offset.
+        file.seek(SeekFrom::Start(offset.0)).expect("Failed to seek to offset");
+
+        // Create an iterator that reads the log file starting from the offset and deserializes the transactions.
+        Box::new(std::iter::from_fn(move || {
+            match LogEntry::deserialize(&mut file) {
+                Ok(log_entry) => Some((log_entry.tx_offset, log_entry.tx_data)),
+                Err(_) => None,
+            }
+        }))
     }
 }
 
