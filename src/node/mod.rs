@@ -297,8 +297,8 @@ mod tests {
     use crate::durability;
     use omnipaxos::*;
 
-    const SERVERS: [NodeId; 5]=[1,2,3,4,5];
-//    const SERVERS: [NodeId; 3]=[1,2,3];
+//    const SERVERS: [NodeId; 5]=[1,2,3,4,5];
+    const SERVERS: [NodeId; 3]=[1,2,3];
 
     #[allow(clippy::type_complexity)]
     fn initialise_channels_between_nodes() -> (
@@ -794,6 +794,7 @@ mod tests {
         .expect("Failed to get leader");
 
         println!("The new cluster leader is {}", new_cluster_leader);
+        assert_eq!(new_cluster_leader, next_leader.clone());
     }
 
     #[test]
@@ -859,8 +860,9 @@ mod tests {
             .expect("Failed to get leader");
             println!("The new cluster leader is {}", new_cluster_leader);
             std::thread::sleep(Duration::from_millis(500));
-            
+            assert_eq!(new_cluster_leader, cluster_leader);
         }
+
     }
 
     #[test]
