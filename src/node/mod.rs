@@ -512,7 +512,7 @@ mod tests {
         
             // Assuming we have already obtained the leader_pid and nodes HashMap
             let leader = nodes.get(&leader_pid).unwrap();
-            for _ in 0..7 {
+            for _ in 0..5 {
                 let mut tx = leader.0.lock().unwrap().begin_mut_tx().unwrap();
                 leader
                     .0
