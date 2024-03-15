@@ -147,7 +147,11 @@ impl Node {
     /// We need to be careful with which nodes should do this according to desired
     /// behavior in the Datastore as defined by the application.
     fn apply_replicated_txns(&mut self) {
-        todo!()
+        let iter = self
+        .omnipaxos_durability
+        .omni_paxos
+        .read_entries(0..self.omnipaxos_durability.omni_paxos.get_compacted_idx());
+        
     }
 
     pub fn begin_tx(
